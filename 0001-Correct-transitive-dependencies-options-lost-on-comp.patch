@@ -1,0 +1,68 @@
+From 5df95a52f875bf4c5931374a4b897eb6a51be3e3 Mon Sep 17 00:00:00 2001
+From: Philippe Bouamriou <Philippe.Bouamriou@opal-rt.com>
+Date: Fri, 5 May 2023 11:26:43 +0200
+Subject: [PATCH] Correct transitive dependencies options lost on compatible
+ package if this package is already locked
+
+---
+ conans/client/graph/graph_binaries.py         |  5 +++-
+ .../integration/graph_lock/graph_lock_test.py | 30 +++++++++++++++++++
+ 2 files changed, 34 insertions(+), 1 deletion(-)
+
+diff --git a/conans/client/graph/graph_binaries.py b/conans/client/graph/graph_binaries.py
+index a4c2dbb53..8ad2c5d8e 100644
+--- a/conans/client/graph/graph_binaries.py
++++ b/conans/client/graph/graph_binaries.py
+@@ -199,7 +199,10 @@ class GraphBinariesAnalyzer(object):
+                     if comp_package_id == locked.package_id:
+                         node._package_id = locked.package_id  # FIXME: Ugly definition of private
+                         node.conanfile.settings.values = compatible_package.settings
+-                        node.conanfile.options.values = compatible_package.options
++                        # With :
++                        # node.conanfile.options.values = compatible_package.options
++                        # We lost transitive dependencies options
++                        node.conanfile.options._package_options.values = compatible_package.options._package_values
+                         break
+                 else:
+                     raise ConanException("'%s' package-id '%s' doesn't match the locked one '%s'"
+diff --git a/conans/test/integration/graph_lock/graph_lock_test.py b/conans/test/integration/graph_lock/graph_lock_test.py
+index 2eff3be3c..445f45be0 100644
+--- a/conans/test/integration/graph_lock/graph_lock_test.py
++++ b/conans/test/integration/graph_lock/graph_lock_test.py
+@@ -606,3 +606,33 @@ def test_compatible_transient_options():
+     client.run("create compat compatible/1.0@ -s os=Linux")
+     client.run("lock create consumer/conanfile.py -s os=Windows --lockfile-out=deps.lock")
+     client.run("install consumer/conanfile.py --lockfile=deps.lock")
++
++def test_compatible_transient_options_with_lock():
++    # https://github.com/conan-io/conan/issues/XXX
++    client = TestClient()
++
++    lib_base = GenConanfile().with_option("shared", [True, False])\
++        .with_default_option("shared", False)
++
++    lib_compatible = textwrap.dedent("""
++        from conans import ConanFile
++        class LibCompatibleConanFile(ConanFile):
++            settings = "os"
++            options = {"shared": [True, False]}
++            default_options = {"shared": False}
++            requires = "base/1.0"
++            def package_id(self):
++                if self.settings.os == "Windows":
++                    compatible_pkg = self.info.clone()
++                    compatible_pkg.settings.os = "Linux"
++                    self.compatible_packages.append(compatible_pkg)
++        """)
++    consumer = GenConanfile().with_requires("compatible/1.0")
++    client.save({"base/conanfile.py": lib_base,
++                 "compat/conanfile.py": lib_compatible,
++                 "consumer/conanfile.py": consumer})
++    client.run("create base base/1.0@")
++    client.run("create compat compatible/1.0@ -s os=Linux")
++    client.run("lock create consumer/conanfile.py -s os=Windows --lockfile-out=deps_step1.lock")
++    client.run("lock create consumer/conanfile.py -s os=Windows --lockfile=deps_step1.lock --lockfile-out=deps_step2.lock")
++    client.run("install consumer/conanfile.py --lockfile=deps_step2.lock")
+-- 
+2.40.0.windows.1
+
